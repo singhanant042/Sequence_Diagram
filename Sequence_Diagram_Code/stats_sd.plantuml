@@ -1,0 +1,104 @@
+@startuml "Stats Registration Sequence Diagram"
+
+' Customize the appearance
+skinparam sequenceArrowColor DarkBlue
+skinparam sequenceLifeLineBorderColor Navy
+skinparam sequenceGroupBorderColor Gray
+skinparam sequenceGroupBackgroundColor WhiteSmoke
+skinparam noteBorderColor DarkGoldenRod
+skinparam noteBackgroundColor LightYellow
+
+
+actor "Customer" as user
+participant "StatsBridgeRegistration()" as service
+participant " RegisterDevice()" as rd
+participant "ConvertAndValidate()" as cv
+participant "CheckProductNumberSerialNumber()" as cpn
+participant "ValidateContactInfoValue()" as vci
+participant "ValidateSiteInfoValue()" as vsi
+participant " ValidateCustomerValue()" as vcv
+participant "IsGuid()" as ig
+
+user->service:customer do the registraion with dbid
+service->rd:calling the method with dbid and a string(hpsaDCRegistration)
+rd->rd:Check for activity logging and start the registration
+
+alt if dbid is null or empty
+   rd-->service:return StatusResponse.DBIDNullOrEmpty and do logging
+else proceed
+end
+
+alt if hpsaDCRegistration is null or empty
+   rd-->service:return StatusResponse.HpsaDCRegistrationNullOrEmpty and do logging
+else proceed
+end
+
+rd->cv:Converting to xml request and validating it
+cv-->rd:returning response
+
+alt requestxml is null
+  rd-->service: return StatusResponse.RegistrationInvalidXmlString,and do logging
+else proceed
+end
+rd->rd: initializing HpsaReg = (hpsaDCRegistrationType)requestXml;
+alt exception
+   rd-->service: return StatusResponse.RegistrationInvalidXmlString
+else proceed
+end 
+
+rd->rd:activity.MessageGuid = HpsaReg.GUID;
+
+alt Missing "SYSTEM_IDENTIFIERS"
+  rd-->service:return StatusResponse.MissingSystemIdentifiers, and Log.Warn("Missing 'SYSTEM_IDENTIFIERS' section! DBID = " + dbid);
+else proceed
+end
+
+rd->cpn: Checking Product Number and SerialNumber
+cpn-->rd:return bool as reponse
+
+alt response=false
+    rd-->service: return statusresponce as "ProductNumber or SerialNumber is null!",and do logging
+else proceed
+end
+
+rd->vci:Validating the contact info
+vci-->rd:return string containing reponse
+
+alt response !=null
+rd-->service:return StatusResponse.InvalidCustomerInfoValue,and do logging
+else proceed
+end
+
+rd->vsi:Validating the site info
+vsi-->rd:return string containing reponse
+
+alt response !=null
+rd-->service:return StatusResponse.InvalidCustomerInfoValue,and do logging
+else proceed
+end
+
+rd->vcv:Validating the customer value
+vcv-->rd:returning bool as response
+
+alt response=false
+  rd-->service: return StatusResponse.InvalidCustomerInfoValue,do logging
+else proceed
+end
+
+rd->ig:Validating the Guid
+ig-->rd:return bool as response
+ 
+alt response=false
+   rd-->service:return StatusResponse.CorruptGuid
+else Other exception
+   rd->service:returning  StatusResponse.CorruptGuid,logging
+else proceed
+end
+
+rd->rd:Checking for the userid,and password\n( (HpsaReg.HPPIdentification == null || string.IsNullOrEmpty(HpsaReg.HPPIdentification.UserId)) ?)
+
+alt IsNullorEmpty
+  rd->rd:Provide the default  Identification UserId and password\n(StaTSBridgeConfiguration.HPPID : HpsaReg.HPPIdentification.UserId)
+else exception
+  rd-->service:return StatusResponse.HPPIdentificationIsInvalid anddo logging
+end
