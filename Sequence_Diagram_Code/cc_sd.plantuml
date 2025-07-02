@@ -1,0 +1,122 @@
+@startuml "Client Registration Sequence Diagram"
+
+' Customize the appearance
+skinparam sequenceArrowColor DarkBlue
+skinparam sequenceLifeLineBorderColor Navy
+skinparam sequenceGroupBorderColor Gray
+skinparam sequenceGroupBackgroundColor WhiteSmoke
+skinparam noteBorderColor DarkGoldenRod
+skinparam noteBackgroundColor LightYellow
+
+actor "Customer" as user
+participant "Client Registration" as service
+participant "Register Client()" as rc
+participant "RegisterClientFuntion()" as rcf
+participant "retrieveGdids()" as rg
+participant ".GetGdids()" as gg
+participant "AlreadyRegisteredAsDC()" as ag
+participant "GetInstallId()" as gi
+participant "UnregisteredasDC()" as ug
+participant "RegisterAlternativeClient()" as rac
+participant "RegisterClient()" as RC
+participant "SadbSubmit()" as ss
+database "AppDB" as db
+database "SADB" as sdb
+
+
+user->service:User use this service for registration by putting Xml file
+service->rc:Called with xml request 
+rc->rcf:Passing xml request+ref string(successfailureMessage)
+
+
+alt Request file is null
+    rcf->rcf:successfailureMessage="Required missing file"
+    rcf-->rc:ClientRegistrationError().result(Registration failed)
+end
+
+alt Extracted xsdpath is null
+    rcf->rcf:successfailureMessage="null requestXsdPath retrieved from the config file"
+    rcf-->rc:ClientRegistrationError().result(Registration failed)
+end
+
+rcf->rcf:Validating the xml request\n( Using ServiceExtensions.ConvertAndValidate)
+
+alt Validation failed
+alt XmlSchemaException
+   rcf->rcf:successfailureMessage="registration request validation failed"
+   rcf-->rc: ClientRegistrationInvalidRequestError().result(Registration failed)
+else Other exception
+    rcf->rcf:successfailureMessage="unexpected error trying to validate registration request"
+    rcf-->rc: ClientRegistrationInvalidRequestError().result(Registration failed)
+end
+end
+
+rcf->rg:Calling "retrieveGdids()" to generate the OSgdid,
+
+alt Service Available
+     rg->gg:Calling "GetGdids()"
+     gg-->rg:returning   GdidResponse[]
+     rc-->rcf:returning array(Containing all required info)
+alt Gdid is null
+    rcf->rcf:successFailureMessage = "Gdid is Null"
+    rcf-->rc:returning ClientRegistrationInvalidRequestError().result\n(Registration failed)
+else  Gdid is  not null   
+    rcf->rcf:Initialize HWgdid,OSgdid from the responce
+end
+else ServiceUnavailable
+    rg-->rc:ClientRegistrationGdidServiceUnavailableError().result\n(GDID service is not available)
+else Other exception
+    rg-->rc:ClientRegistrationGetGdidError().result
+end
+
+rcf->rcf:Doing Activity Logging\n(through activityDA.InsertValuesToActivityTable())
+rcf->rcf:Generating the Registration token using gdid\n( through RegistrationToken.CreateFromGdid()))
+rcf->rcf:Extracting the InstallID from generated token
+alt attempting to create device entries in AppDB
+    rcf->ag:Calling method with hwgdid
+    ag->gi:calling method "GetInstallID()" using gdid
+    gi->db:Connecting with AppDB for checking Install ID
+    db-->gi:Returning String(which is basically InstallID) as response
+alt InstallID is not null
+    gi-->ag:returning "true"(indicating already registered)
+    ag-->rcf:Already Registered as DC device
+   rcf->ug:access.UnregisterDevice()[calling to unregister]
+   ug-->rcf:returning integer as response\n(if 0 unregisteres,else exception)
+else InstallID is null
+    gi-->ag:returning "false"(indicating new device to register)
+    ag-->rcf:!Already Registered as DC device
+    rcf->rcf:New device for registration
+end
+end
+
+alt Checking for Client
+ alt Client is Fake
+ rcf->rac:Registring as alternate client
+ else Client is not Fake
+ rcf->RC:Registring as Genuine Client
+ rcf->db:Submmiting all the info to AppDB
+end
+end
+
+alt Sending to Sadb
+   rcf->ss:Calling method to for submmiting to SADB
+   ss-->rcf:returning error as responce
+alt Error!=null
+   rcf->rcf:successFailureMessage = "Send to SADB failed"
+   rcf-->rc:ClientRegistrationError().result
+else Error is null
+   ss->sdb:Submitting all the info to the SADB
+end
+end
+
+rcf-->rc:Sending successfailuremessage based on the result value
+@enduml
+
+
+
+
+
+       
+
+
+
