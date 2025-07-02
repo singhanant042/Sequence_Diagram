@@ -18,6 +18,8 @@ participant "ValidateContactInfoValue()" as vci
 participant "ValidateSiteInfoValue()" as vsi
 participant " ValidateCustomerValue()" as vcv
 participant "IsGuid()" as ig
+participant "CheckDeviceStatus()" as cd
+participant "PartialRegisteDevice" as pr
 
 user->service:customer do the registraion with dbid
 service->rd:calling the method with dbid and a string(hpsaDCRegistration)
@@ -100,5 +102,27 @@ rd->rd:Checking for the userid,and password\n( (HpsaReg.HPPIdentification == nul
 alt IsNullorEmpty
   rd->rd:Provide the default  Identification UserId and password\n(StaTSBridgeConfiguration.HPPID : HpsaReg.HPPIdentification.UserId)
 else exception
-  rd-->service:return StatusResponse.HPPIdentificationIsInvalid anddo logging
+  rd-->service:return StatusResponse.HPPIdentificationIsInvalid and do logging
 end
+
+
+alt Checking the device status
+   rd->cd:Making a call for checking the device status using dbid
+   cd-->rd:Return the responce in string format
+alt "isCompleteRegistration"
+   rd-->service:returning StatusResponse: statusResponse = StatusResponse.AlreadyRegistration
+else !isPartialRegistered
+   rd->rd:log-Start partial registration.DBID:{0}"
+   rd->pr:Calling to start partial registration
+   pr-->rd: return the status response
+alt Successfull Partial Registration
+   rd->rd:Log:"Partial register successfully for DBID:{0}", dbid
+else Error
+   rd-->service:Returning status Response Stating the reason
+end
+else Partiall Registration Already Completed
+  rd->rd:Log.Info("The Device had been partially registered. Directly jump to Complete Registration. DBID = " + dbid);
+end
+end
+
+@enduml
