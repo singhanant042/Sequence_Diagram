@@ -1,0 +1,151 @@
+@startuml "End point Registration Sequence Diagram"
+
+' Customize the appearance
+skinparam sequenceArrowColor DarkBlue
+skinparam sequenceLifeLineBorderColor Navy
+skinparam sequenceGroupBorderColor Gray
+skinparam sequenceGroupBackgroundColor WhiteSmoke
+skinparam noteBorderColor DarkGoldenRod
+skinparam noteBackgroundColor LightYellow
+
+
+actor "Customer" as user
+participant "OOS Registration Service" as ors 
+participant "Register()" as r
+participant "Execute()" as e
+participant "InsertValuesToActivityTable()" as iv
+participant "IseeWebServiceHeaderAuthenticate()" as auth
+participant "CheckInformation()" as ci
+participant "GetSystemIdentifiers()" as gs
+participant "GetGdid()" as gg
+participant "AlreadyRegisteredAsDC()" as ag
+participant "GetInstallId()" as gi
+participant "UnregisteredasDC()" as ug
+participant "CcEndpointRegister()" as cc
+participant "SadbSubmit()" as ss
+participant "Put()" as p
+database "AppDB" as adb
+database "SADB" as sdb
+
+
+user-> ors:Service open  to customer for register
+ors->r:Calling with the xml request
+r->e:Passing the reference of same xml file during calling
+
+
+
+alt Starting the Registration
+ 
+
+e->e:Loading the configuration from AMC if null
+
+alt ActivityRecoringEnabled
+  e->iv:Calling to insert value in DB
+  iv->adb:inserting info like-serverName, "OOSRegistration", "Register", threadId, messageGuid, clientOsGdid, "EXT", DateTime.UtcNow
+  e->e: insertActivitySuccess = true if instering success
+  e->e:Logging error as "Activity Record Failed!" + ex.Message"
+else ActivityRecoring is not Enabled
+  e->e:Do logging as ""Activity Record Disabled"
+end
+
+e->e:Record the datatime
+e->e:Intializing the "WebServiceHeaderAuthenticate" object for authenticating the header of the request
+e->auth:Calling the function with header of the request file\n(This will authenticate the Registrationtoken and GDID present in header)
+auth-->e:returning the status of the authentication
+e-->r:return errorCode.ToOOSRegistrationServiceResult() is error!=null
+
+e->e:Extracting the informating from the request file\n(information= request.RegistrationInformation)
+
+e->ci:Checking for the validation of information extrated
+ci-->e:returning the errorStatus
+
+
+alt Checking for the validation of information extrated
+   e->ci:Checking for the validation of information extrated
+   ci-->e:returning the errorStatus
+   alt errorStatus is null
+   e->e:Store the information in variable name "infomation"
+   else errorStatus!=null
+   e-->r:returning errorCode.ToOOSRegistrationServiceResult()
+end
+end
+
+alt GetSystemIdentifiers
+   e->gs:Getting CSID from header(calling method by passing "request.Header.CSID")
+   e->gs::Getting OSID from header(calling method by passing "request.Header.OSID")
+   gs-->e:returning the errorStatus for CSID
+   gs-->e:returning the errorStatus for CSID
+   alt errorStatus is null
+   e->e:Store the CSID in variable name "clientCsid"
+   e->e:Store the CSID in variable name "clientOsid"
+   else errorStatus!=null
+   e-->r:returning errorCode.ToOOSRegistrationServiceResult()[for CSID]
+   e-->r:returning errorCode.ToOOSRegistrationServiceResult()[for OSID]
+   end
+end
+
+alt Retriving the Gdids
+   e->gg:Calling function by passing registration,clientOSgdid,exception(ref)
+   gg-->e:returning gdidPairs(an array containing all info)
+
+   alt Exception=null and gdidpairs!=null
+      e->e:store the requires info in declared variables
+   else Exception!=null or gdid is null
+   e-->r:returning the suitable exception\n(return newException.ToOOSRegistrationServiceResult() if gdidpair is null)\n( return exception.ToOOSRegistrationServiceResult() if exception !=null)
+   end
+end
+
+alt checking device status
+    e->ag:Calling method with hwgdid
+    ag->gi:calling method "GetInstallID()" using gdid
+    gi->adb:Connecting with AppDB for checking Install ID
+    adb-->gi:Returning String(which is basically InstallID) as response
+alt InstallID is not null
+    gi-->ag:returning "true"(indicating already registered)
+    ag-->e:Already Registered as DC device
+    e->ug:access.UnregisterDevice()[calling to unregister]
+   ug-->e:returning integer as response\n(if 0 unregisteres,else exception)
+else InstallID is null
+    gi-->ag:returning "false"(indicating new device to register)
+    ag-->e:!Already Registered as DC device
+    e->e:New device for registration
+end
+end
+
+e->e:Initializing  configuration("OosRegistrationConfiguration") if null
+
+alt From Configuration,if SubmitToSadbSync=true
+    e->e:Declaring DeviceRegistration if null
+    e->cc:submit to SADB Synchronously via DeviceRegistration SBS with guid\n( using meothod "CcEndpointRegister()")
+    cc-->e:returning errorcode (ccEndpointRegisterStatus.ToErrorCode())
+else SubmitToSadbSync=false
+    e->ss:submit to SADB Asynchronously via SADB-RECEIVER with guid\n(using method "SadbSubmit()")
+    ss->e:returning errorcode
+end
+
+
+alt errorcode!=null
+       e-->r: return errorCode.ToOOSRegistrationServiceResult()
+       e->p:Moved below submitting data to SADB as we shouldn't store in AppDB if SADB store failed
+       p-->e:returning errorcode
+    alt errocode !=null
+      e->r:return errorCode.ToOOSRegistrationServiceResult()
+    end
+else errorcode=null
+    e-->r: return new OOSRegistrationServiceResult()\n(Object containing=IsSuccess = true,Gdid = endpointOsGdid, OSGdidUsn = endpointOsGdid_usn,HWGdid = endpointHwGdid, HWGdidUsn = endpointHwGdid_usn)                 
+end
+
+else Exception
+   e->e:Log erro as Unexpected error
+   e->r:  return new OOSRegistrationServiceResult()\n (Object containing =Error = error,IsSuccess = false)
+    
+end 
+
+
+alt Result
+    alt result.IsSuccess=true
+    r->r:Log.InfoFormat("OOSRegistrationService.Register succeeded with  + {parameter})
+    else result.IsSuccess=false
+    r->r:Log.Warn("OOSRegistrationService.Register failed");
+end
+end
