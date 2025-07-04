@@ -1,0 +1,106 @@
+@startuml "Stats Registration(Complete Registration)"
+
+' Customize the appearance
+skinparam sequenceArrowColor DarkBlue
+skinparam sequenceLifeLineBorderColor Navy
+skinparam sequenceGroupBorderColor Gray
+skinparam sequenceGroupBackgroundColor WhiteSmoke
+skinparam noteBorderColor DarkGoldenRod
+skinparam noteBackgroundColor LightYellow
+
+participant "Service()" as s
+participant "RegisterDevice()" as rd
+participant "RetrieveFlagsFromSADB()" as rf
+participant "RetrieveMOOSKeyByGDID()" as rm
+participant "RegisterPrimaryContactInfo()" as rp
+participant "RegisterSecondaryContactInfo()" as rs
+participant "RegisterContactPersonInfo()" as rc
+participant "RegisterCustomerOrgSiteInf()" as ro
+participant "RegisterPartnerInfo()"  as rpi
+participant "LinkContractAndWarranty()" as lc
+participant "SetCompleteRegistrationFlagWithTrue()" as sc
+
+alt Retrieving the flags from SADB
+rd->rf: calling to get SupportAutomationCommunicationEnabledFlag and SupportAutomationRegistrationCompleteFlag from SADB
+rf-->rd:return the bool in  respose
+alt !RetrieveFlagsFromSADB(hwgdid)
+   rd-->s:return statusResponse:StatusResponse.RetrieveFlagFromSADBTimeoutException
+else Proceed
+end 
+end
+
+rd->rd:do the logging:"Start to Retrieve mooskey from SADB. DBID = " + dbid
+alt Retreving the MOOSKEY 
+   rd->rm:Calling to get the "MOOSKEY" using hwgdid
+   rm-->rd:returing the mooskey as integer
+alt  Mooskey=-1
+   rd-->s:return StatusResponse.NullMooskeyReturnFromSADB
+else Proceed
+   rd->rp:Registration of primary contact info using HPPID,HpsaReg
+   rp->rc:Registration of person contact info with true indication
+   rc-->rp:return bool in response
+   rp-->rd:return the bool response
+alt !RegisterSecondaryContactInfo(HPPID, HpsaReg)
+   rd->s:return  StatusResponse.SetContactInfoFailure
+else Proceed 
+end
+
+alt HpsaReg.Contacts.Count > 1
+   rd->rs:Registration of secondary contact info
+   rs->rc:Registration of person contact info with false indication
+   rc-->rs:return bool in response
+   rs-->rd:return the bool response
+alt !RegisterSecondaryContactInfo(HPPID, HpsaReg)
+  rd-->s:return  StatusResponse.SetContactInfoFailure
+else proceed
+end
+end
+
+  rd->ro: Call for the Registration of customer org site info
+  ro-->rd: return the bool reponse
+alt !RegisterCustomerOrgSiteInfo(HPPID, HpsaReg)
+  rd-->s:return StatusResponse.SetSiteInfoFailure
+else Proceed
+end
+ rd->rd:Checking for the default partner ID
+alt IsNullorEmpty
+  rd-->s: return StatusResponse.SetPartnerInfoFailure
+else Proceed
+  rd->rd:DefaultPartnerID = StaTSBridgeConfiguration.DefaultPartnerID
+end
+ rd->rd:setting "salesPartnerID" to DefaultId if null or empty\n else to HpsaReg.CPServiceProviderID
+ rd->rd:setting "supportPartnerID"  to DefaultID if null or empty \n else to HpsaReg.CPSupportProviderID
+ 
+ rd->rpi:Calling to register for the <b>"sales partner"</b> info with HPPID, salesPartnerID, salesPartner
+ rpi-->rd:returning hpsaStatusResponseType
+alt statusResponse != StatusResponse.Success
+   rd-->s:return statusResponse:as registration of SalesPartner failed
+else Proceed
+end
+
+  rd->rpi:Calling to register the <b>"support Partner"</b> info with HPPID, supportPartnerID, supportPartner
+  rpi-->rd:returning hpsaStatusResponseType 
+
+alt statusResponse != StatusResponse.Success
+   rd-->s:return statusResponse:as registration of Support Partner failed
+else Proceed
+end
+  
+  rd->lc:Linking the contract and Warranty
+  lc-->rd:returning the response in bool
+alt !LinkContractAndWarranty(HPPID, HpsaReg)
+  rd-->s:return StatusResponse.LinkContractAndWarrantyFailure
+else Proceed
+end
+
+ rd->sc:Setting CompleteRegistrationFlag with HPPID
+ sc-->rd:returning the response in bool
+
+alt !SetCompleteRegistrationFlagWithTrue(HPPID)
+   rd-->s:return StatusResponse.SetCompleteRegistrationFlagFailed
+else send email to customer if enabled
+end
+  
+end
+
+@enduml
