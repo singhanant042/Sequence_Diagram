@@ -1,0 +1,76 @@
+@startuml "SADB Forwarder Sequence Diagram"
+
+' Customize the appearance
+skinparam sequenceArrowColor DarkBlue
+skinparam sequenceLifeLineBorderColor Navy
+skinparam sequenceGroupBorderColor Gray
+skinparam sequenceGroupBackgroundColor WhiteSmoke
+skinparam noteBorderColor DarkGoldenRod
+skinparam noteBackgroundColor LightYellow
+
+
+participant "SADBForwarder Service()" as sadb
+participant " run()" as r
+participant "LoadInfoFile()\n[Method in FileToProcess.cs]" as lf
+participant  "SendFile()\n[Method in FileToProcess.cs]" as sf
+participant  "TransmitToSadb()\n[Method in FileToProcess.cs]" as ts 
+participant "CheckedIfRegProcessing()" as cp 
+participant " SendMessageToMessageSBS()" as sm
+
+
+sadb->r:Calling run to start the service
+alt try
+r->r:intializing the SADBConfig(config = new SADBConfiguration())
+r->r:Checking for the directory,if not present create one
+r->r:intializing  bool sendToSADB = config.SendToSADB,from the config
+
+alt SendToSADB=true
+  r->r:Extracting all the "**.xml" file from the directory
+  r->r:Looping through all the files
+  r->lf:if process if true then call this to load the file
+  lf-->r:returning the response as bool
+  r->sf:calling function to submit to sadb
+  sf->sf:intializing submitSBS = true;
+  sf->sf:Extracting the filedatainfo,intialising SADB configuration,retry count
+
+  alt retryCount == 1 || retryCount == (config.RetryThreshold - 1)) && config.SendErrorMessageSBS
+  sf->sf:validating and adding attribute to xmlfile
+   sf->cp:Calling to check the registration process\n <b>submitSBS</b> = CheckedIfRegProcessing(xmlfile.client_osgdid, dataFileInfo.FullName);
+   cp-->sf:returning bool as reponse
+   alt submitSBS=true
+    sf->sm:Sending all detailed as message to SBS
+   else exception
+    sf->sf:logging the error:\nAn exception occured when attempting to send an error message to SBS
+   end
+  end
+  
+  alt If file Exist and retryCount < config.RetryThreshold
+  sf->ts:Call this function to validate the attribute from the file,and sending to sadb using <b>https</b> protocol
+  ts->ts:validating  and intialising the attribute
+  ts->ts:creating the uri\n <b>StringUtils.BuildSadbUri()</b> with all required parameter.
+  ts->ts: send all info to SADB using url\n HP.Isee.Core.Sender.Sender.SendHttps(data, uri, config.ContentType, xmlfile.MessageType, config.Timeout)
+  
+  alt All attribute is varified and info has been submitted to SADB
+  ts-->sf:return as true
+  sf->sf:deleting the fileinfo(dataFileInfo.Delete())
+  sf->sf:deleting the metadata(metaFileInfo.Delete())
+  else ServiceUnavailableException,ServiceRequestException,other exception
+  ts-->sf:return false
+  sf->sf:increasing the retry count,and saving that to the xml file
+
+  end
+  else exception
+  sf->sf:Do the logging,go for next try and delete the previous datafile and metafile
+  end
+else exception
+  r->r:Do logging:\n  log.InfoFormat("Service stop to send data to SADB as SendToSADB set to false");
+end
+ else DirectoryNotFoundException
+ r->r:logging the error as diretory not found
+ else IOException
+ r->r:logging the error as exception reading from the file
+ else Exception
+ r->r:unknown exception
+end
+
+@enduml
